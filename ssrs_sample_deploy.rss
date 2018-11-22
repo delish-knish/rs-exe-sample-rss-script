@@ -1,0 +1,373 @@
+'Sample Command: rs -i SSRSSampleDeploy.rss -s http://localhost/reportserver -v rootPath="/" -v DWServerName="localhost" -v DWDatabaseName="MyDataWarehouse" -v sourceFilePath="C:\SourceCode\SSRS" -e Mgmt2010 -t
+
+Dim definition As [Byte]() = Nothing
+Dim warnings As Warning() = Nothing
+
+Public Sub Main()
+  'Set if you want a top-level folder name under your root path. 
+  'An example of an appropriate time to us is if your root is SSRS root but you share Report Manager with other applications.
+  'Sample command at the top of this file would create all objects under /Information Collaboration/
+  'This also allows for multiple sets of the same reports when setting the rootPath input param (e.g. /Dev/Information Collaboration, /QA/Information Collaboration
+  Dim baseFolderName As String = "Information Collaboration"
+  
+  'Used throughout the script for building paths
+  Dim basePath As String 
+  
+  Name of folder to create Data Sources in
+  Dim dataSourceFolderName As String = "Data Sources"
+  
+  Name of folder to create Datasets in
+  Dim datasetsFolderName As String = "Datasets"
+  
+  If rootPath = "/" Then
+    basePath = "/" + baseFolderName
+  Else
+    basePath = rootPath + "/" + baseFolderName
+  End If
+  
+  rs.Credentials = System.Net.CredentialCache.DefaultCredentials
+    
+  'Create root folder
+  If rootPath <> "/" Then
+    CreateFolder(rootpath.Replace("/",""), "/", "", "False")
+  End If
+  
+  'Create base folder
+  CreateFolder(baseFolderName, rootPath, "", "False")
+  
+  'Create the data source folder 
+  CreateFolder(dataSourceFolderName, basePath, "", "True")
+    
+  'Create the datasets folder 
+  CreateFolder(datasetsFolderName, basePath, "", "True")
+  
+  'Create a "hard-coded" data source
+  CreateMyDataWarehouseDataSource(basePath + "/" + dataSourceFolderName)
+
+  'Upload logo image
+  PublishImage("\", "logo_report_header.png", basePath, "", "image/png", "True", False)
+  
+    
+  'Publish Data Sets and Reports
+  Dim FileList As String() = Directory.GetFiles(sourceFilePath)
+  Dim FileName As String
+  Dim Hidden As String = "True"
+  
+  'Multiple loop structures to ensure shared data sets are published first
+  
+  'Shared data sets
+  For Each FileName In FileList    
+    If FileName.Substring(FileName.Length - 4) = ".rsd" Then
+      PublishItem("\", System.IO.Path.GetFileName(FileName), "DataSet", basePath + "/" + datasetsFolderName, "", Hidden, True, basePath + "/" + dataSourceFolderName, "MyDataWarehouse", "")
+    End If
+    
+    Hidden = "False"
+  Next
+  
+  'Reports
+  For Each FileName In FileList
+    If System.IO.Path.GetFileName(FileName).Substring(0, 6) = "admin_" Or System.IO.Path.GetFileName(FileName).Substring(0, 6) = "drill_" Then Hidden = "True" 
+    
+    If FileName.Substring(FileName.Length - 4) = ".rdl" Then
+      PublishItem("\", System.IO.Path.GetFileName(FileName), "Report", basePath, "", Hidden, True, basePath + "/" + dataSourceFolderName, "MyDataWarehouse", basePath + "/" + datasetsFolderName)
+    End If
+    
+    Hidden = "False"
+  Next
+  
+  'Delete Items
+  DeleteDeprecatedItems(basePath)
+
+End Sub
+
+
+Public Sub CreateFolder(ByVal folderName As String, ByVal parentPath As String, ByVal description As String, ByVal hidden As String)
+  
+  Dim completePath As String
+  
+  'Common CatalogItem properties
+   Dim descprop As New [Property]
+   descprop.Name = "Description"
+   descprop.Value = description
+   Dim hiddenprop As New [Property]
+   hiddenprop.Name = "Hidden"
+   hiddenprop.Value = hidden
+   
+   Dim props(1) As [Property]
+   props(0) = descprop
+   props(1) = hiddenprop
+  
+  If parentPath = "/" Then
+    completePath = parentPath + folderName
+  Else 
+    completePath = parentPath + "/" + folderName
+  End If
+  
+  Try
+    'String FolderName, String ParentPath, Property[] Properties
+    rs.CreateFolder(folderName, parentPath, props)
+    Console.WriteLine("Folder created: {0}", completePath)
+  
+    Catch e As SoapException
+    If e.Message.IndexOf("AlreadyExists") > 0 Then
+      Console.WriteLine("Folder: " + completePath + " already exists.")
+    Else 
+      Console.WriteLine("Error : (" + completePath + ") " + e.Detail.Item("ErrorCode").InnerText + " (" + e.Detail.Item("Message").InnerText + ")")
+      Throw e
+    End If
+  
+  End Try
+
+End Sub
+
+
+Public Sub PublishItem(ByVal sourceFileChildPath As String, ByVal itemName As String, ByVal itemType As String, _
+        ByVal folderPath As String, ByVal description As String, ByVal hidden as String, ByVal overwrite As Boolean, _
+        ByVal dataSourcePath As String, ByVal dataSourceName As String, ByVal dataSetPath As String)
+      
+    Dim itemNameWithoutExtension As String
+    
+    Select Case itemType 
+      Case "Report" 
+        itemNameWithoutExtension = itemName.Replace(".rdl","")
+      Case "DataSet"
+      	itemNameWithoutExtension = itemName.Replace(".rsd","")
+    End Select    
+    
+   'Common CatalogItem properties
+    Dim descprop As New [Property]
+    descprop.Name = "Description"
+    descprop.Value = description
+    Dim hiddenprop As New [Property]
+    hiddenprop.Name = "Hidden"
+    hiddenprop.Value = hidden
+    
+    Dim props(1) As [Property]
+    props(0) = descprop
+    props(1) = hiddenprop
+  
+  Try
+    Dim stream As FileStream = File.OpenRead(sourceFilePath + "\" + sourceFileChildPath + "\" + itemName)
+    definition = New [Byte](stream.Length - 1) {}
+    stream.Read(definition, 0, CInt(stream.Length))
+    stream.Close()
+  Catch e As IOException
+    Console.WriteLine(e.Message)
+    Throw e
+  End Try
+  
+  Try
+    Dim item As CatalogItem 
+    
+    'ItemType As String, Name As String, Parent As String, Overwrite As Boolean, Definition As Byte(), Properties As Property(), 
+    item = rs.CreateCatalogItem( _
+    	itemType, _ 
+    	itemNameWithoutExtension, _ 
+    	folderPath, _ 
+    	overwrite, _ 
+    	definition, _ 
+    	props, _ 
+    	warnings)
+    	
+    Dim warningCount As Integer
+           
+    If Not (warnings Is Nothing) Then
+      Dim warning As Warning
+      For Each warning In warnings
+        If warning.Message.IndexOf("is not published") = 0 Then
+    	  Console.WriteLine(warning.Message)
+    	  warningCount = warningCount + 1
+    	End If
+    
+      Next warning
+    End If 
+    
+    If warningCount > 0 Then
+      Console.WriteLine(itemType + ": {0} published successfully with " + warningCount.ToString() + " warnings", itemNameWithoutExtension)
+    Else
+      Console.WriteLine(itemType + ": {0} published successfully", itemNameWithoutExtension)
+    End If
+    
+    If itemType="Report" Then
+      Dim dataSources As DataSource() = rs.GetItemDataSources(folderPath + "/" + itemNameWithoutExtension)
+      Dim itemDataSource As DataSource
+        
+      For Each itemDataSource In dataSources
+        Dim newDS As New DataSource()
+        Dim dsRef As New DataSourceReference()
+        
+        dsRef.Reference = dataSourcePath + "/" + dataSourceName
+        newDS.Item = dsRef
+        newDS.Name = dataSourceName
+            
+        Dim newDataSources As DataSource() = New DataSource(){newDS}
+        rs.SetItemDataSources(folderPath + "/" + itemNameWithoutExtension, newDataSources)
+        Console.Writeline("Report: " + itemNameWithoutExtension + " DataSource set to " + dataSourcePath + "/" + dataSourceName + " successfully") 
+      Next itemDataSource
+      
+      
+      Dim referenceData() As ItemReferenceData =  rs.GetItemReferences(folderPath + "/" + itemNameWithoutExtension, "DataSet") 
+      Dim dataSet As New ItemReferenceData()
+      For Each dataSet in referenceData
+        Dim references(0) As ItemReference 
+        Dim reference As New ItemReference()
+      	
+        reference.Name = dataSet.Name 
+        reference.Reference = dataSetPath + "/" + dataSet.Name 
+        references(0) = reference
+      	
+      	rs.SetItemReferences(folderPath + "/" + itemNameWithoutExtension, references)
+      	Console.Writeline("Report: " + itemNameWithoutExtension + " DataSet set to " + dataSetPath + "/" + dataSet.Name + " successfully")
+      Next dataSet
+        
+    End If
+    
+    If itemType = "DataSet" Then 
+      Dim referenceData() As ItemReferenceData =  rs.GetItemReferences(folderPath + "/" + itemNameWithoutExtension, "DataSet") 
+      Dim references(0) As ItemReference 
+      Dim reference As New ItemReference() 
+    
+      reference.Name = referenceData(0).Name                         ' This should be "DataSetDataSource" 
+      reference.Reference = dataSourcePath + "/" + dataSourceName
+      references(0) = reference 
+    
+      rs.SetItemReferences(folderPath + "/" + itemNameWithoutExtension, references) 
+      Console.Writeline("DataSet: " + itemNameWithoutExtension + " Data Source set to " + dataSourcePath + "/" + dataSourceName + " successfully") 
+    End If
+    
+  Catch e As SoapException
+    If e.Detail.Item("ErrorCode").InnerText = "rsItemAlreadyExists" Then
+      Console.WriteLine(itemType + ": " + folderPath + "/" + itemNameWithoutExtension + " already exists and overwrite = " + overwrite.ToString())
+    Else
+      Console.WriteLine("Error: (" + itemNameWithoutExtension + ") " + e.Detail.Item("ErrorCode").InnerText + " (" + e.Detail.Item("Message").InnerText + ")")
+      Throw e
+    End If
+  End Try
+End Sub
+
+
+Public Sub PublishImage(ByVal sourceFileChildPath As String, ByVal imageName As String, _
+        ByVal folderPath As String, ByVal description As String, ByVal mimeType As String, ByVal hidden As String, ByVal overwrite As Boolean)
+        
+  'Common CatalogItem properties
+  Dim descprop As New [Property]
+  descprop.Name = "Description"
+  descprop.Value = description
+  Dim hiddenprop As New [Property]
+  hiddenprop.Name = "Hidden"
+  hiddenprop.Value = hidden
+  Dim mimeprop As New [Property]
+  mimeprop.Name = "MimeType"
+  mimeprop.Value = mimeType 
+  
+  Dim props(2) As [Property]
+  props(0) = descprop
+  props(1) = hiddenprop
+  props(2) = mimeprop
+  
+  Try
+    Dim stream As FileStream = File.OpenRead(sourceFilePath + "\" + sourceFileChildPath + "\" + imageName)
+    definition = New [Byte](stream.Length - 1) {}
+    stream.Read(definition, 0, CInt(stream.Length))
+    stream.Close()
+  Catch e As IOException
+    Console.WriteLine(e.Message)
+  End Try
+  
+  Try
+    Dim item As CatalogItem 
+    
+    'ItemType As String, Name As String, Parent As String, Overwrite As Boolean, Definition As Byte(), Properties As Property(), 
+    item = rs.CreateCatalogItem( _
+    	"Resource", _ 
+    	imageName, _ 
+    	folderPath, _ 
+    	overwrite, _ 
+    	definition, _ 
+    	props, _ 
+    	warnings)
+    
+    If Not (warnings Is Nothing) Then
+      Dim warning As Warning
+      For Each warning In warnings
+        Console.WriteLine(warning.Message)
+      Next warning
+    Else
+      Console.WriteLine("Image" + ": {0} published successfully with no warnings", imageName)
+    End If
+    
+  Catch e As SoapException
+    If e.Detail.Item("ErrorCode").InnerText = "rsItemAlreadyExists" Then
+      Console.WriteLine("Image: " + folderPath + "/" + imageName + " already exists and overwrite = " + overwrite.ToString())
+    Else
+      Console.WriteLine("Error: (" + imageName + ") " + e.Detail.Item("ErrorCode").InnerText + " (" + e.Detail.Item("Message").InnerText + ")")
+      Throw e
+    End If
+  End Try
+End Sub
+
+
+Public Sub CreateMyDataWarehouseDataSource(ByVal folderPath As String)
+
+  Dim dataSourceName As String = "MyDataWarehouse"
+  Dim dataSourcePath As String = folderPath 
+
+  'Define the data source definition.
+  Dim definition As New DataSourceDefinition()
+  
+
+  definition.CredentialRetrieval = CredentialRetrievalEnum.Store
+  definition.ConnectString = "data source=" & DWServerName & ";initial catalog=" + DWDatabaseName
+  definition.Enabled = True
+  definition.EnabledSpecified = True
+  definition.Extension = "SQL"
+  definition.ImpersonateUser = False
+  definition.ImpersonateUserSpecified = False
+  definition.WindowsCredentials = False
+  definition.UserName = "MyDataWarehouseDataReader"
+  definition.Password = "1234"
+
+  Try
+    'String DataSourceName, String ParentFolder, Boolean OverwriteExisting, DataSourceDefinition Definition, Property[] Properties
+    rs.CreateDataSource(dataSourceName, dataSourcePath, false, definition, Nothing)
+
+  Catch e As SoapException
+    If e.Message.IndexOf("AlreadyExists") > 0 Then
+      Console.WriteLine("Data Source: " + dataSourceName + " already exists and overwrite = false")
+    Else
+      Console.WriteLine("Error : (" + dataSourceName + ") " + e.Detail.Item("ErrorCode").InnerText + " (" + e.Detail.Item("Message").InnerText + ")")
+      Throw e
+    End If
+    
+  End Try
+
+End Sub
+
+
+Public Sub DeleteDeprecatedItems(ByVal basePath As String)
+  
+  'Deletes items explicitly
+  'Should be used for deprecated and/or renamed reports
+  
+  DeleteItem(basePath, "Some report I no longer want on the server")
+  DeleteItem(basePath, "Another report")
+
+End Sub
+
+
+Public Sub DeleteItem(ByVal folderPath As String, ByVal itemName As String)
+  
+  Try  
+    rs.DeleteItem(folderPath + "/" + itemName)
+
+  Catch e As SoapException
+    If e.Message.IndexOf("cannot be found") > 0 Then
+      Console.WriteLine("Item: " + itemName + " does not exist and can't be deleted")
+    Else
+      Console.WriteLine("Error : (" + itemName + ") " + e.Detail.Item("ErrorCode").InnerText + " (" + e.Detail.Item("Message").InnerText + ")")
+      Throw e
+    End If
+    
+  End Try
+
+End Sub
